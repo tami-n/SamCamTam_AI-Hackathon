@@ -1,0 +1,1 @@
+AI is transforming industries. Healthcare uses AI for diagnostics. We also talked about sports and weather, which was fun but off-topic. LLMs are costly due to token usage. Context optimization can reduce costs significantly.

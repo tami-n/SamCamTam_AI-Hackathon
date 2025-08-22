@@ -1,0 +1,83 @@
+{
+  "model": "llama3.2:3b",
+  "timestamp": "2025-08-23 00:26:03",
+  "summary": {
+    "total_runs": 5,
+    "model_used": "llama3.2:3b",
+    "overall_metrics": {
+      "avg_token_reduction": 8.521170787155441,
+      "avg_cost_savings": 5.5244772536202245,
+      "avg_quality_score": 0.7224,
+      "max_token_reduction": 18.88888888888889,
+      "max_cost_savings": 8.712121212121213,
+      "best_quality": 0.767
+    },
+    "strategy_breakdown": {
+      "aggressive_summarization": {
+        "avg_token_reduction": 8.529885384105333,
+        "avg_cost_savings": 3.5356719861689943,
+        "avg_quality_score": 0.7026666666666667,
+        "runs": 3
+      },
+      "bullet_points": {
+        "avg_token_reduction": 2.898550724637681,
+        "avg_cost_savings": 8.303249097472925,
+        "avg_quality_score": 0.767,
+        "runs": 1
+      },
+      "keyword_extraction": {
+        "avg_token_reduction": 14.117647058823529,
+        "avg_cost_savings": 8.712121212121213,
+        "avg_quality_score": 0.737,
+        "runs": 1
+      }
+    }
+  },
+  "detailed_results": [
+    {
+      "strategy": "aggressive_summarization",
+      "original_tokens": 90,
+      "reduced_tokens": 73,
+      "token_reduction_percent": 18.88888888888889,
+      "cost_savings_percent": 4.4520547945205475,
+      "quality_score": 0.699,
+      "latency_ms": 12864.076614379883
+    },
+    {
+      "strategy": "aggressive_summarization",
+      "original_tokens": 69,
+      "reduced_tokens": 66,
+      "token_reduction_percent": 4.3478260869565215,
+      "cost_savings_percent": 5.776173285198556,
+      "quality_score": 0.732,
+      "latency_ms": 12656.500339508057
+    },
+    {
+      "strategy": "bullet_points",
+      "original_tokens": 69,
+      "reduced_tokens": 67,
+      "token_reduction_percent": 2.898550724637681,
+      "cost_savings_percent": 8.303249097472925,
+      "quality_score": 0.767,
+      "latency_ms": 11467.522621154785
+    },
+    {
+      "strategy": "aggressive_summarization",
+      "original_tokens": 85,
+      "reduced_tokens": 83,
+      "token_reduction_percent": 2.3529411764705883,
+      "cost_savings_percent": 0.3787878787878788,
+      "quality_score": 0.677,
+      "latency_ms": 11000.070333480835
+    },
+    {
+      "strategy": "keyword_extraction",
+      "original_tokens": 85,
+      "reduced_tokens": 73,
+      "token_reduction_percent": 14.117647058823529,
+      "cost_savings_percent": 8.712121212121213,
+      "quality_score": 0.737,
+      "latency_ms": 9660.357236862183
+    }
+  ]
+}

@@ -2,13 +2,13 @@ import requests
 import time
 import json
 import re
+import hashlib
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import statistics
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import re
 
 
 @dataclass
@@ -35,100 +35,358 @@ class TokenReductionStrategy(ABC):
     def get_name(self) -> str:
         pass
 
-class AggressiveSummarizationStrategy(TokenReductionStrategy):
-    """Reduces tokens by removing redundancy and condensing content"""
+class ImprovedAggressiveStrategy(TokenReductionStrategy):
+    """Enhanced aggressive summarization with better regex patterns"""
     
     def reduce_tokens(self, text: str) -> str:
-        # Remove excessive whitespace
+        # Remove excessive whitespace first
         text = re.sub(r'\s+', ' ', text.strip())
         
-        # Remove redundant phrases and filler words
+        # Enhanced redundant patterns with more comprehensive coverage
         redundant_patterns = [
-            r'\b(please|kindly|would you|could you)\b',
-            r'\b(i think that|i believe that|in my opinion)\b',
-            r'\b(obviously|clearly|of course)\b',
-            r'\b(um|uh|well|so|like)\b(?=\s)',
+            # Courtesy language
+            r'\b(please|kindly|would you|could you|can you|will you)\b',
+            r'\b(i would appreciate|i would be grateful|thank you)\b',
+            
+            # Opinion markers
+            r'\b(i think that|i believe that|in my opinion|from my perspective)\b',
+            r'\b(it seems to me|i feel that|i suspect that)\b',
+            
+            # Obviousness markers
+            r'\b(obviously|clearly|of course|naturally|certainly)\b',
+            r'\b(without a doubt|it goes without saying)\b',
+            
+            # Filler words and hesitation
+            r'\b(um|uh|well|so|like|you know|i mean)\b(?=\s)',
+            r'\b(sort of|kind of|more or less)\b',
+            
+            # Intensifiers (often unnecessary)
             r'\b(actually|basically|essentially|really|quite|very|extremely)\b',
+            r'\b(absolutely|completely|totally|entirely|utterly)\b',
+            r'\b(significantly|considerably|substantially)\b',
+            
+            # Redundant time references
+            r'\b(currently|at present|at this moment|right now)\b',
+            r'\b(in the future|going forward|moving forward)\b',
         ]
         
         for pattern in redundant_patterns:
             text = re.sub(pattern, '', text, flags=re.IGNORECASE)
         
-        # Compress common phrases
+        # Enhanced phrase compressions
         compressions = {
+            # Time expressions
             r'as soon as possible': 'ASAP',
+            r'at this point in time': 'now',
+            r'in the near future': 'soon',
+            r'at the present time': 'now',
+            
+            # Examples and clarifications
             r'for example': 'e.g.',
+            r'for instance': 'e.g.',
             r'that is to say': 'i.e.',
             r'in other words': 'i.e.',
+            r'such as': 'like',
+            
+            # Causal relationships
             r'because of the fact that': 'because',
-            r'in spite of the fact that': 'despite',
-            r'in order to': 'to',
             r'due to the fact that': 'because',
+            r'in spite of the fact that': 'despite',
+            r'despite the fact that': 'despite',
+            r'in order to': 'to',
+            r'for the purpose of': 'to',
+            r'with the intention of': 'to',
+            
+            # Common verbose phrases
+            r'a large number of': 'many',
+            r'a small number of': 'few',
+            r'make a decision': 'decide',
+            r'come to a conclusion': 'conclude',
+            r'give consideration to': 'consider',
+            r'make an assumption': 'assume',
+            r'conduct an analysis': 'analyze',
+            r'perform a review': 'review',
+        }
+        
+        for long_form, short_form in compressions.items():
+            text = re.sub(long_form, short_form, text, flags=re.IGNORECASE)
+        
+        # Remove redundant articles and prepositions where safe
+        text = re.sub(r'\b(the|a|an)\s+(same|following|above|below|previous|next)\b', r'\2', text, flags=re.IGNORECASE)
+        
+        # Clean up extra spaces and punctuation
+        text = re.sub(r'\s+', ' ', text.strip())
+        text = re.sub(r'\s*,\s*,\s*', ', ', text)  # Fix double commas
+        text = re.sub(r'\s*\.\s*\.\s*', '. ', text)  # Fix double periods
+        
+        return text
+    
+    def get_name(self) -> str:
+        return "improved_aggressive"
+
+class DomainAwareStrategy(TokenReductionStrategy):
+    """Domain-specific compression based on content analysis"""
+    
+    def reduce_tokens(self, text: str) -> str:
+        text_lower = text.lower()
+        
+        # Detect domain and apply specific strategies
+        if self._is_code_domain(text_lower):
+            return self._compress_code_request(text)
+        elif self._is_business_domain(text_lower):
+            return self._compress_business_request(text)
+        elif self._is_academic_domain(text_lower):
+            return self._compress_academic_request(text)
+        elif self._is_creative_domain(text_lower):
+            return self._compress_creative_request(text)
+        else:
+            return self._generic_compression(text)
+    
+    def _is_code_domain(self, text: str) -> bool:
+        code_indicators = ['code', 'debug', 'python', 'javascript', 'java', 'function', 
+                          'variable', 'class', 'method', 'algorithm', 'programming', 'syntax']
+        return sum(1 for word in code_indicators if word in text) >= 2
+    
+    def _is_business_domain(self, text: str) -> bool:
+        business_indicators = ['business', 'marketing', 'strategy', 'revenue', 'profit', 
+                              'customer', 'market', 'investment', 'budget', 'plan']
+        return sum(1 for word in business_indicators if word in text) >= 2
+    
+    def _is_academic_domain(self, text: str) -> bool:
+        academic_indicators = ['research', 'study', 'analysis', 'theory', 'hypothesis', 
+                              'methodology', 'conclusion', 'literature', 'academic']
+        return sum(1 for word in academic_indicators if word in text) >= 2
+    
+    def _is_creative_domain(self, text: str) -> bool:
+        creative_indicators = ['story', 'creative', 'write', 'character', 'plot', 
+                              'design', 'artistic', 'narrative', 'poem']
+        return sum(1 for word in creative_indicators if word in text) >= 2
+    
+    def _compress_code_request(self, text: str) -> str:
+        # Preserve technical terms, be very direct
+        essential_code_patterns = [
+            r'(debug|fix|error|issue|problem)',
+            r'(function|method|class|variable)',
+            r'(python|javascript|java|c\+\+|html|css)',
+            r'(code|script|program)',
+        ]
+        
+        sentences = re.split(r'[.!?]+', text)
+        compressed = []
+        
+        for sent in sentences:
+            sent = sent.strip()
+            if any(re.search(pattern, sent, re.IGNORECASE) for pattern in essential_code_patterns):
+                # Remove courtesy language but keep technical details
+                clean = re.sub(r'\b(please|could you|would you|i need|help me)\b', '', sent, flags=re.IGNORECASE)
+                clean = re.sub(r'\b(i think|i believe|i\'m having)\b', '', clean, flags=re.IGNORECASE)
+                clean = re.sub(r'\s+', ' ', clean.strip())
+                if clean:
+                    compressed.append(clean)
+        
+        result = '. '.join(compressed)
+        return result if result else "Debug code issue."
+    
+    def _compress_business_request(self, text: str) -> str:
+        # Focus on deliverables and requirements
+        key_business_terms = ['plan', 'strategy', 'analysis', 'budget', 'revenue', 
+                             'market', 'customer', 'investment', 'roi']
+        
+        sentences = re.split(r'[.!?]+', text)
+        essential_info = []
+        
+        for sent in sentences:
+            sent_lower = sent.lower()
+            if (any(term in sent_lower for term in key_business_terms) or
+                'include' in sent_lower or 'need' in sent_lower or 'require' in sent_lower):
+                
+                # Compress business jargon
+                clean = sent
+                clean = re.sub(r'\b(comprehensive|detailed|thorough)\b', '', clean, flags=re.IGNORECASE)
+                clean = re.sub(r'\b(i would like|i need|it would be helpful)\b', 'Need:', clean, flags=re.IGNORECASE)
+                clean = re.sub(r'\s+', ' ', clean.strip())
+                if clean:
+                    essential_info.append(clean)
+        
+        return '. '.join(essential_info)
+    
+    def _compress_academic_request(self, text: str) -> str:
+        # Preserve methodology and key concepts
+        academic_markers = ['explain', 'analyze', 'compare', 'evaluate', 'discuss', 
+                           'research', 'study', 'theory', 'concept']
+        
+        sentences = re.split(r'[.!?]+', text)
+        key_sentences = []
+        
+        for sent in sentences:
+            if any(marker in sent.lower() for marker in academic_markers):
+                # Remove academic fluff but keep precision
+                clean = re.sub(r'\b(it would be beneficial|i would appreciate)\b', '', sent, flags=re.IGNORECASE)
+                clean = re.sub(r'\b(comprehensive understanding of|detailed explanation of)\b', '', clean, flags=re.IGNORECASE)
+                clean = re.sub(r'\s+', ' ', clean.strip())
+                if clean:
+                    key_sentences.append(clean)
+        
+        return '. '.join(key_sentences)
+    
+    def _compress_creative_request(self, text: str) -> str:
+        # Preserve creative requirements and constraints
+        creative_elements = ['story', 'character', 'plot', 'setting', 'theme', 
+                            'style', 'tone', 'genre', 'creative']
+        
+        sentences = re.split(r'[.!?]+', text)
+        creative_specs = []
+        
+        for sent in sentences:
+            if any(element in sent.lower() for element in creative_elements):
+                clean = re.sub(r'\b(i would love|i would like|it would be great)\b', 'Create:', sent, flags=re.IGNORECASE)
+                clean = re.sub(r'\s+', ' ', clean.strip())
+                if clean:
+                    creative_specs.append(clean)
+        
+        return '. '.join(creative_specs)
+    
+    def _generic_compression(self, text: str) -> str:
+        return ImprovedAggressiveStrategy().reduce_tokens(text)
+    
+    def get_name(self) -> str:
+        return "domain_aware"
+
+class LengthAwareStrategy(TokenReductionStrategy):
+    """Adaptive compression based on text length with better quality preservation"""
+    
+    def reduce_tokens(self, text: str) -> str:
+        word_count = len(text.split())
+        
+        if word_count <= 30:
+            # Minimal compression for short texts
+            return self._minimal_compression(text)
+        elif word_count <= 80:
+            # Light compression for medium texts
+            return self._light_compression(text)
+        elif word_count <= 150:
+            # Medium compression
+            return self._medium_compression(text)
+        else:
+            # Aggressive compression for long texts
+            return self._aggressive_compression(text)
+    
+    def _minimal_compression(self, text: str) -> str:
+        # Only remove the most obvious redundancies
+        text = re.sub(r'\b(obviously|clearly|of course)\b', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s+', ' ', text.strip())
+        return text
+    
+    def _light_compression(self, text: str) -> str:
+        # Remove filler words but preserve structure
+        fillers = ['actually', 'basically', 'really', 'quite', 'very']
+        for filler in fillers:
+            text = re.sub(r'\b' + filler + r'\b', '', text, flags=re.IGNORECASE)
+        
+        # Simple phrase replacements
+        text = re.sub(r'in order to', 'to', text, flags=re.IGNORECASE)
+        text = re.sub(r'because of the fact that', 'because', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s+', ' ', text.strip())
+        return text
+    
+    def _medium_compression(self, text: str) -> str:
+        # More aggressive removal while preserving meaning
+        patterns = [
+            r'\b(please|kindly|would you|could you)\b',
+            r'\b(i think that|i believe that|in my opinion)\b',
+            r'\b(actually|basically|essentially|really|quite|very)\b',
+        ]
+        
+        for pattern in patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        
+        # Phrase compressions
+        compressions = {
+            r'for example': 'e.g.',
+            r'that is to say': 'i.e.',
+            r'as soon as possible': 'ASAP',
             r'at this point in time': 'now',
         }
         
         for long_form, short_form in compressions.items():
             text = re.sub(long_form, short_form, text, flags=re.IGNORECASE)
         
-        # Clean up extra spaces
         text = re.sub(r'\s+', ' ', text.strip())
-        
         return text
     
+    def _aggressive_compression(self, text: str) -> str:
+        return ImprovedAggressiveStrategy().reduce_tokens(text)
+    
     def get_name(self) -> str:
-        return "aggressive_summarization"
+        return "length_aware"
 
 class KeywordExtractionStrategy(TokenReductionStrategy):
-    """Reduces tokens by extracting key information only"""
+    """Enhanced keyword extraction with domain-specific keywords"""
     
     def reduce_tokens(self, text: str) -> str:
-        # Split into sentences
-        sentences = re.split(r'[.!?]+', text)
-        
-        # Keep sentences with important keywords
+        # Expanded keyword list with domain-specific terms
         important_keywords = [
-            'data', 'analysis', 'result', 'conclusion', 'important', 'key', 'main',
-            'problem', 'solution', 'error', 'issue', 'requirement', 'need', 'must',
-            'create', 'build', 'develop', 'implement', 'generate', 'calculate',
-            'explain', 'help', 'understand', 'learn', 'teach', 'show'
+            # Action words
+            'create', 'build', 'develop', 'implement', 'generate', 'calculate', 'design',
+            'explain', 'help', 'understand', 'learn', 'teach', 'show', 'demonstrate',
+            'analyze', 'review', 'evaluate', 'assess', 'compare', 'optimize',
+            
+            # Problem/solution words
+            'problem', 'solution', 'error', 'issue', 'bug', 'fix', 'debug',
+            'requirement', 'need', 'must', 'should', 'important', 'critical',
+            
+            # Domain-specific terms
+            'data', 'analysis', 'result', 'conclusion', 'research', 'study',
+            'code', 'function', 'algorithm', 'method', 'python', 'javascript',
+            'business', 'marketing', 'strategy', 'plan', 'budget', 'revenue',
+            'model', 'system', 'process', 'workflow', 'automation',
         ]
         
+        sentences = re.split(r'[.!?]+', text)
         filtered_sentences = []
+        
         for sentence in sentences:
             sentence = sentence.strip()
             if not sentence:
                 continue
+            
+            sentence_lower = sentence.lower()
+            
+            # Keep sentence if it contains important keywords, is short, or has numbers/specifics
+            if (any(keyword in sentence_lower for keyword in important_keywords) or 
+                len(sentence.split()) <= 6 or
+                re.search(r'\d+', sentence) or  # Contains numbers
+                re.search(r'[A-Z]{2,}', sentence)):  # Contains acronyms
                 
-            # Keep sentence if it contains important keywords or is very short
-            if (any(keyword in sentence.lower() for keyword in important_keywords) or 
-                len(sentence.split()) <= 8):
                 filtered_sentences.append(sentence)
         
         return '. '.join(filtered_sentences)
     
     def get_name(self) -> str:
-        return "keyword_extraction"
+        return "enhanced_keyword_extraction"
 
 class StructuralCompressionStrategy(TokenReductionStrategy):
-    """Reduces tokens by converting to structured format and removing fluff"""
+    """Enhanced structural compression with better separators"""
     
     def reduce_tokens(self, text: str) -> str:
-        # Split into sentences and compress
         sentences = re.split(r'[.!?]+', text)
         
-        # Filter and compress sentences
         compressed = []
         for sentence in sentences:
             sentence = sentence.strip()
-            if len(sentence) < 10:  # Skip very short sentences
+            if len(sentence) < 8:  # Skip very short sentences
                 continue
             
-            # Remove common filler words
+            # Remove common filler words more comprehensively
             fillers = ['actually', 'basically', 'essentially', 'really', 'quite', 
-                      'very', 'extremely', 'obviously', 'clearly', 'definitely']
+                      'very', 'extremely', 'obviously', 'clearly', 'definitely',
+                      'absolutely', 'completely', 'totally', 'certainly']
             
             for filler in fillers:
                 sentence = re.sub(r'\b' + filler + r'\b', '', sentence, flags=re.IGNORECASE)
+            
+            # Remove redundant phrases
+            sentence = re.sub(r'\b(i would like|i need|could you|please help me)\b', '', sentence, flags=re.IGNORECASE)
             
             # Clean up spaces
             sentence = re.sub(r'\s+', ' ', sentence.strip())
@@ -136,14 +394,17 @@ class StructuralCompressionStrategy(TokenReductionStrategy):
             if sentence and len(sentence) > 5:
                 compressed.append(sentence)
         
-        # Join with concise separators
-        return ' | '.join(compressed)
+        # Use more concise separators based on content
+        if len(compressed) <= 3:
+            return '. '.join(compressed)  # Keep periods for short lists
+        else:
+            return ' | '.join(compressed)  # Use pipes for longer lists
     
     def get_name(self) -> str:
-        return "structural_compression"
+        return "enhanced_structural"
 
 class BulletPointStrategy(TokenReductionStrategy):
-    """Converts verbose text to bullet points"""
+    """Enhanced bullet point conversion with better filtering"""
     
     def reduce_tokens(self, text: str) -> str:
         sentences = re.split(r'[.!?]+', text)
@@ -151,58 +412,123 @@ class BulletPointStrategy(TokenReductionStrategy):
         key_points = []
         for sentence in sentences:
             sentence = sentence.strip()
-            if len(sentence.split()) < 5:  # Skip very short sentences
+            if len(sentence.split()) < 4:  # Skip very short sentences
                 continue
             
-            # Extract the core message by removing filler
-            core = re.sub(r'\b(i would like|i need|could you|please|kindly)\b', '', sentence, flags=re.IGNORECASE)
+            # Extract core message more aggressively
+            core = sentence
+            
+            # Remove courtesy language
+            courtesy_patterns = [
+                r'\b(i would like|i would appreciate|i need|could you|please|kindly)\b',
+                r'\b(would you mind|it would be helpful|i hope)\b',
+                r'\b(thank you|thanks|gratefully)\b'
+            ]
+            
+            for pattern in courtesy_patterns:
+                core = re.sub(pattern, '', core, flags=re.IGNORECASE)
+            
+            # Remove opinion markers
+            core = re.sub(r'\b(i think|i believe|i feel|in my opinion)\b', '', core, flags=re.IGNORECASE)
+            
+            # Clean up
             core = re.sub(r'\s+', ' ', core.strip())
             
-            if core:
+            if core and len(core) > 10:
+                # Make it more action-oriented
+                if not re.match(r'^(create|build|analyze|explain|help|show)', core, re.IGNORECASE):
+                    if any(word in core.lower() for word in ['explain', 'understand', 'learn']):
+                        core = f"Explain: {core}"
+                    elif any(word in core.lower() for word in ['create', 'build', 'develop']):
+                        core = f"Create: {core}"
+                    elif any(word in core.lower() for word in ['analyze', 'review', 'evaluate']):
+                        core = f"Analyze: {core}"
+                
                 key_points.append(f"• {core}")
         
-        return '\n'.join(key_points)
+        return '\n'.join(key_points) if key_points else "• " + text.strip()
     
     def get_name(self) -> str:
-        return "bullet_points"
+        return "enhanced_bullet_points"
 
-class LocalTokenCounter:
-    """Simple token counter based on word approximation"""
+class EnhancedTokenCounter:
+    """More accurate token counting with caching"""
+    
+    def __init__(self):
+        self.cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
     
     def count_tokens(self, text: str) -> int:
-        # Rough approximation: 1 token ≈ 0.75 words for English
+        # Use text hash for caching
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        
+        if text_hash in self.cache:
+            self.cache_hits += 1
+            return self.cache[text_hash]
+        
+        self.cache_misses += 1
+        
+        # Improved token counting using multiple methods
         words = len(text.split())
-        return int(words * 1.33)  # Convert words to approximate tokens
+        chars = len(text)
+        
+        # Method 1: Word-based (1 token ≈ 0.75 words)
+        word_estimate = int(words * 1.33)
+        
+        # Method 2: Character-based (~3.5-4 chars per token)
+        char_estimate = chars // 4
+        
+        # Method 3: Consider punctuation and special characters
+        special_chars = len(re.findall(r'[^\w\s]', text))
+        punctuation_tokens = special_chars // 2
+        
+        # Weighted average of estimates
+        token_count = int((word_estimate * 0.5 + char_estimate * 0.4 + punctuation_tokens * 0.1))
+        
+        # Cache the result
+        self.cache[text_hash] = token_count
+        
+        # Limit cache size
+        if len(self.cache) > 1000:
+            # Remove oldest entries (simple FIFO)
+            oldest_keys = list(self.cache.keys())[:100]
+            for key in oldest_keys:
+                del self.cache[key]
+        
+        return token_count
+    
+    def get_cache_stats(self) -> Dict[str, int]:
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "cache_size": len(self.cache),
+            "hit_rate": self.cache_hits / (self.cache_hits + self.cache_misses) if (self.cache_hits + self.cache_misses) > 0 else 0
+        }
 
 class TokenGains:
-    """Main class for managing token reduction and cost analysis with local LLMs"""
+    """Enhanced TokenGains with quick wins implemented"""
     
     def __init__(self, 
                  model_name: str = "llama3.2:3b", 
                  ollama_url: str = "http://localhost:11434"):
-        """
-        Initialize TokenGains system for local models
-        
-        Args:
-            model_name: Name of the Ollama model to use
-            ollama_url: URL of the Ollama server
-        """
         self.model_name = model_name
         self.ollama_url = ollama_url
-        self.token_counter = LocalTokenCounter()
+        self.token_counter = EnhancedTokenCounter()
+        self.cost_per_token = 1.0
         
-        # Cost units (arbitrary units for comparison since local models are free)
-        # This represents computational cost/time rather than monetary cost
-        self.cost_per_token = 1.0  # 1 unit per token for comparison purposes
-        
+        # Enhanced strategies with quick wins
         self.strategies = [
-            AggressiveSummarizationStrategy(),
+            ImprovedAggressiveStrategy(),
+            DomainAwareStrategy(),
+            LengthAwareStrategy(),
             KeywordExtractionStrategy(),
             StructuralCompressionStrategy(),
             BulletPointStrategy()
         ]
         
         self.results: List[QueryResult] = []
+        self.response_cache = {}  # Cache for model responses
     
     def check_ollama_connection(self) -> bool:
         """Check if Ollama server is running"""
@@ -213,12 +539,13 @@ class TokenGains:
             return False
     
     def query_local_model(self, prompt: str) -> Tuple[str, float]:
-        """
-        Query the local Ollama model
+        """Query with caching to avoid redundant calls"""
+        # Create cache key
+        cache_key = hashlib.md5(f"{self.model_name}:{prompt}".encode()).hexdigest()
         
-        Returns:
-            Tuple of (response_text, latency_ms)
-        """
+        if cache_key in self.response_cache:
+            return self.response_cache[cache_key]
+        
         if not self.check_ollama_connection():
             raise ConnectionError(
                 "Cannot connect to Ollama server. Make sure Ollama is running:\n"
@@ -235,7 +562,7 @@ class TokenGains:
             "stream": False,
             "options": {
                 "temperature": 0.7,
-                "num_predict": 200  # Limit response length
+                "num_predict": 200
             }
         }
         
@@ -250,8 +577,19 @@ class TokenGains:
             result = response.json()
             
             latency = (time.time() - start_time) * 1000
+            response_data = (result.get("response", ""), latency)
             
-            return result.get("response", ""), latency
+            # Cache the response
+            self.response_cache[cache_key] = response_data
+            
+            # Limit cache size
+            if len(self.response_cache) > 50:
+                # Remove oldest entries
+                oldest_keys = list(self.response_cache.keys())[:10]
+                for key in oldest_keys:
+                    del self.response_cache[key]
+            
+            return response_data
             
         except requests.RequestException as e:
             raise Exception(f"Error querying model: {e}")
@@ -261,14 +599,11 @@ class TokenGains:
         return tokens * self.cost_per_token
     
     def evaluate_response_quality(self, original_response: str, reduced_response: str) -> float:
-        """
-        Evaluate response quality using semantic similarity,
-        with length acting only as a penalty for extreme shrinkage/expansion.
-        """
+        """Enhanced quality evaluation with length-aware scoring"""
         if not original_response or not reduced_response:
             return 0.0
 
-        # --- 1. Semantic similarity (core metric) ---
+        # Semantic similarity (primary metric)
         try:
             vectorizer = TfidfVectorizer().fit([original_response, reduced_response])
             tfidf = vectorizer.transform([original_response, reduced_response])
@@ -276,43 +611,87 @@ class TokenGains:
         except Exception:
             semantic_score = 0.0
 
-        # --- 2. Structure preservation (sentence ratio) ---
+        # Structure preservation
         original_sentences = len(re.findall(r'[.!?]+', original_response))
         reduced_sentences = len(re.findall(r'[.!?]+', reduced_response))
+        
         if original_sentences > 0:
             structure_score = min(reduced_sentences / original_sentences, 1.0)
         else:
             structure_score = 1.0
 
-        # --- 3. Combine (semantic + structure) ---
-        quality_score = (semantic_score * 0.8) + (structure_score * 0.2)
+        # Key concept retention (enhanced)
+        original_concepts = set(re.findall(r'\b[A-Za-z]{4,}\b', original_response.lower()))
+        reduced_concepts = set(re.findall(r'\b[A-Za-z]{4,}\b', reduced_response.lower()))
+        
+        if original_concepts:
+            concept_retention = len(original_concepts & reduced_concepts) / len(original_concepts)
+        else:
+            concept_retention = 1.0
 
-        # --- 4. Length penalty (only for extremes) ---
+        # Combine scores with improved weights
+        quality_score = (semantic_score * 0.5 + 
+                        structure_score * 0.2 + 
+                        concept_retention * 0.3)
+
+        # Length penalty (more nuanced)
         length_ratio = len(reduced_response) / max(len(original_response), 1)
-        if length_ratio < 0.1 or length_ratio > 1.2:
-            quality_score *= 0.7  # penalize collapse/expansion
+        
+        if length_ratio < 0.05:  # Too aggressive compression
+            quality_score *= 0.5
+        elif length_ratio < 0.15:  # Very aggressive but acceptable
+            quality_score *= 0.8
+        elif length_ratio > 1.1:  # Response got longer (bad)
+            quality_score *= 0.9
 
         return round(min(max(quality_score, 0.0), 1.0), 3)
     
-    def optimize_query(self, prompt: str, strategy: TokenReductionStrategy) -> Tuple[str, int]:
-        """Apply token reduction strategy to a prompt"""
-        reduced_prompt = strategy.reduce_tokens(prompt)
-        token_count = self.token_counter.count_tokens(reduced_prompt)
-        return reduced_prompt, token_count
+    def select_best_strategies(self, prompt: str) -> List[TokenReductionStrategy]:
+        """Smart strategy selection based on prompt analysis"""
+        text_lower = prompt.lower()
+        word_count = len(prompt.split())
+        
+        selected_strategies = []
+        
+        # Always include the improved aggressive strategy
+        selected_strategies.append(ImprovedAggressiveStrategy())
+        
+        # Add domain-aware if we can detect domain
+        domain_indicators = {
+            'code': ['code', 'debug', 'function', 'python', 'javascript'],
+            'business': ['business', 'plan', 'strategy', 'marketing'],
+            'academic': ['research', 'study', 'analysis', 'explain'],
+        }
+        
+        for domain, indicators in domain_indicators.items():
+            if sum(1 for indicator in indicators if indicator in text_lower) >= 2:
+                selected_strategies.append(DomainAwareStrategy())
+                break
+        
+        # Add length-aware for longer texts
+        if word_count > 50:
+            selected_strategies.append(LengthAwareStrategy())
+        
+        # Add keyword extraction for information-rich texts
+        if word_count > 30:
+            selected_strategies.append(KeywordExtractionStrategy())
+        
+        # Add structural for very long texts
+        if word_count > 100:
+            selected_strategies.append(StructuralCompressionStrategy())
+        
+        # Limit to top 4 strategies to avoid over-testing
+        return selected_strategies[:4]
     
     def run_comparison(self, prompt: str) -> Dict:
-        """
-        Run comparison between original and optimized queries
-        
-        Args:
-            prompt: The input prompt to optimize
-            
-        Returns:
-            Dictionary with comparison results
-        """
+        """Enhanced comparison with smart strategy selection"""
         print(f"🔍 Analyzing prompt: {prompt[:100]}...")
         
         original_tokens = self.token_counter.count_tokens(prompt)
+        
+        # Smart strategy selection
+        selected_strategies = self.select_best_strategies(prompt)
+        print(f"  🎯 Selected {len(selected_strategies)} strategies for testing")
         
         # Run original query
         print("  📤 Running original query...")
@@ -324,19 +703,19 @@ class TokenGains:
             print(f"❌ Error with original query: {e}")
             return {"error": str(e)}
         
-        # Test each strategy
+        # Test selected strategies
         strategy_results = []
         
-        for strategy in self.strategies:
+        for strategy in selected_strategies:
             try:
                 print(f"  🔧 Testing {strategy.get_name()}...")
                 
                 # Optimize prompt
                 reduced_prompt, reduced_tokens = self.optimize_query(prompt, strategy)
                 
-                # Skip if no reduction achieved
-                if reduced_tokens >= original_tokens:
-                    print(f"    ⚠️  No token reduction achieved")
+                # Skip if no meaningful reduction achieved
+                if reduced_tokens >= original_tokens * 0.95:  # Less than 5% reduction
+                    print(f"    ⚠️  Insufficient token reduction achieved")
                     continue
                 
                 # Run optimized query
@@ -387,6 +766,12 @@ class TokenGains:
             "strategies": strategy_results
         }
     
+    def optimize_query(self, prompt: str, strategy: TokenReductionStrategy) -> Tuple[str, int]:
+        """Apply token reduction strategy to a prompt"""
+        reduced_prompt = strategy.reduce_tokens(prompt)
+        token_count = self.token_counter.count_tokens(reduced_prompt)
+        return reduced_prompt, token_count
+    
     def get_performance_summary(self) -> Dict:
         """Get overall performance summary across all runs"""
         if not self.results:
@@ -422,6 +807,9 @@ class TokenGains:
                 "runs": len(data["token_reductions"])
             }
         
+        # Add cache statistics
+        cache_stats = self.token_counter.get_cache_stats()
+        
         return {
             "total_runs": len(self.results),
             "model_used": self.model_name,
@@ -433,11 +821,12 @@ class TokenGains:
                 "max_cost_savings": max(cost_savings),
                 "best_quality": max(quality_scores)
             },
-            "strategy_breakdown": strategy_summary
+            "strategy_breakdown": strategy_summary,
+            "cache_performance": cache_stats
         }
 
-    def export_results(self, filename: str = "tokengains_results.json"):
-        """Export results to JSON file for analysis"""
+    def export_results(self, filename: str = "enhanced_tokengains_results.json"):
+        """Export enhanced results to JSON file"""
         results_data = {
             "model": self.model_name,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -459,20 +848,50 @@ class TokenGains:
         with open(filename, 'w') as f:
             json.dump(results_data, f, indent=2)
         
-        print(f"📊 Results exported to {filename}")
+        print(f"📊 Enhanced results exported to {filename}")
+
+    def analyze_prompt_characteristics(self, prompt: str) -> Dict:
+        """Analyze prompt to provide insights for optimization"""
+        analysis = {
+            "word_count": len(prompt.split()),
+            "char_count": len(prompt),
+            "sentence_count": len(re.findall(r'[.!?]+', prompt)),
+            "avg_words_per_sentence": len(prompt.split()) / max(len(re.findall(r'[.!?]+', prompt)), 1),
+        }
+        
+        # Detect redundancy patterns
+        redundancy_patterns = {
+            "courtesy_language": len(re.findall(r'\b(please|kindly|would you|could you)\b', prompt, re.IGNORECASE)),
+            "filler_words": len(re.findall(r'\b(actually|basically|really|very|quite)\b', prompt, re.IGNORECASE)),
+            "opinion_markers": len(re.findall(r'\b(i think|i believe|in my opinion)\b', prompt, re.IGNORECASE)),
+            "repetitive_phrases": len(re.findall(r'\b(\w+)\s+\1\b', prompt, re.IGNORECASE))
+        }
+        
+        analysis["redundancy_score"] = sum(redundancy_patterns.values())
+        analysis["redundancy_breakdown"] = redundancy_patterns
+        
+        # Suggest optimal strategies
+        if analysis["word_count"] > 100:
+            analysis["recommended_strategies"] = ["improved_aggressive", "domain_aware", "length_aware"]
+        elif analysis["redundancy_score"] > 5:
+            analysis["recommended_strategies"] = ["improved_aggressive", "enhanced_structural"]
+        else:
+            analysis["recommended_strategies"] = ["domain_aware", "enhanced_keyword_extraction"]
+        
+        return analysis
 
 def main():
-    """Main function to run TokenGains with local model"""
+    """Enhanced main function with better testing and analysis"""
     
-    print("🚀 TokenGains - Local LLM Cost Optimization")
-    print("=" * 50)
+    print("🚀 Enhanced TokenGains - Local LLM Cost Optimization")
+    print("=" * 60)
     
-    # Initialize with local model
-    print("🔧 Initializing TokenGains with local model...")
+    # Initialize enhanced TokenGains
+    print("🔧 Initializing Enhanced TokenGains...")
     
     try:
         token_gains = TokenGains(
-            model_name="llama3.2:3b",  # You can change this to any model you have
+            model_name="llama3.2:3b",
             ollama_url="http://localhost:11434"
         )
         
@@ -487,13 +906,15 @@ def main():
             return
         
         print("✅ Connected to Ollama server")
+        print(f"🎯 Loaded {len(token_gains.strategies)} enhanced strategies")
         
     except Exception as e:
         print(f"❌ Initialization error: {e}")
         return
     
-    # Test prompts
+    # Enhanced test prompts with various characteristics
     test_prompts = [
+        # Verbose courtesy language (high redundancy)
         """
         I would really appreciate it if you could please help me understand how machine learning algorithms work. 
         I think that it's quite important for me to learn about this topic because I believe that it will be very 
@@ -501,6 +922,7 @@ def main():
         I'm particularly interested in supervised learning, unsupervised learning, and reinforcement learning.
         """,
         
+        # Business request with jargon (medium complexity)
         """
         I need to create a comprehensive business plan for my new startup company. The company will focus on 
         developing sustainable energy solutions for residential properties. I would like the plan to include 
@@ -508,47 +930,87 @@ def main():
         requirements. This is extremely important for securing funding from investors.
         """,
         
+        # Code debugging request (technical domain)
         """
         Can you please help me debug this Python code? I'm having issues with it and I can't figure out what's wrong. 
         The code is supposed to calculate the fibonacci sequence but it's not working properly. I think there might 
         be an error in the logic but I'm not sure where exactly the problem is occurring. Here's the code:
         def fibonacci(n): return fibonacci(n-1) + fibonacci(n-2)
+        """,
+        
+        # Long academic request (high complexity)
+        """
+        I would greatly appreciate a comprehensive explanation of quantum computing principles and their practical applications.
+        I believe that understanding quantum superposition, quantum entanglement, and quantum interference is very important
+        for my research. Could you please provide detailed information about how these concepts work together in quantum algorithms?
+        Additionally, I think it would be extremely helpful if you could explain the current limitations of quantum computing
+        technology and discuss the potential timeline for widespread commercial adoption in various industries such as cryptography,
+        drug discovery, and financial modeling. I would be very grateful for any insights you could share.
+        """,
+        
+        # Concise technical request (low redundancy)
+        """
+        Optimize pandas DataFrame operations for 1M+ rows. Need efficient groupby and rolling window calculations.
+        Focus on memory usage and parallel processing strategies.
         """
     ]
     
-    # Run tests on each prompt
+    # Analyze and test each prompt
+    total_original_cost = 0
+    total_optimized_cost = 0
+    
     for i, prompt in enumerate(test_prompts, 1):
         print(f"\n🧪 TEST {i}/{len(test_prompts)}")
-        print("-" * 30)
+        print("-" * 40)
         
+        # Analyze prompt characteristics
+        analysis = token_gains.analyze_prompt_characteristics(prompt)
+        print(f"📊 Prompt Analysis:")
+        print(f"   Words: {analysis['word_count']}, Sentences: {analysis['sentence_count']}")
+        print(f"   Redundancy Score: {analysis['redundancy_score']}")
+        print(f"   Recommended: {', '.join(analysis['recommended_strategies'])}")
+        
+        # Run comparison
         result = token_gains.run_comparison(prompt)
         
         if "error" in result:
             print(f"❌ Error: {result['error']}")
             continue
         
+        total_original_cost += result['original_cost']
+        
         if not result['strategies']:
             print("⚠️  No successful optimizations found")
             continue
         
-        # Show best performing strategy
-        best_strategy = max(result['strategies'], 
-                          key=lambda x: x['metrics'].cost_savings_percent)
+        # Show top 3 performing strategies
+        sorted_strategies = sorted(result['strategies'], 
+                                 key=lambda x: x['metrics'].cost_savings_percent, 
+                                 reverse=True)
         
-        print(f"\n🏆 Best Strategy: {best_strategy['strategy']}")
-        metrics = best_strategy['metrics']
-        print(f"   Token reduction: {metrics.token_reduction_percent:.1f}%")
-        print(f"   Cost savings: {metrics.cost_savings_percent:.1f}%")
-        print(f"   Quality retention: {metrics.response_quality_score:.2f}")
+        print(f"\n🏆 TOP STRATEGIES:")
+        for j, strategy in enumerate(sorted_strategies[:3], 1):
+            metrics = strategy['metrics']
+            total_optimized_cost += metrics.reduced_cost_units
+            
+            print(f"   {j}. {strategy['strategy']}")
+            print(f"      💰 Cost savings: {metrics.cost_savings_percent:.1f}%")
+            print(f"      📉 Token reduction: {metrics.token_reduction_percent:.1f}%")
+            print(f"      🎯 Quality: {metrics.response_quality_score:.2f}")
+            
+            if j == 1:  # Show the reduced prompt for the best strategy
+                print(f"      📝 Optimized prompt: {strategy['reduced_prompt'][:100]}...")
     
-    # Print overall summary
-    print(f"\n📊 FINAL PERFORMANCE SUMMARY")
-    print("=" * 50)
+    # Enhanced final summary
+    print(f"\n📊 ENHANCED PERFORMANCE SUMMARY")
+    print("=" * 60)
     
     summary = token_gains.get_performance_summary()
     
     if "error" not in summary:
         overall = summary["overall_metrics"]
+        cache_stats = summary["cache_performance"]
+        
         print(f"🤖 Model: {summary['model_used']}")
         print(f"🔢 Total runs: {summary['total_runs']}")
         print(f"📉 Average token reduction: {overall['avg_token_reduction']:.1f}%")
@@ -556,8 +1018,17 @@ def main():
         print(f"🎯 Average quality retention: {overall['avg_quality_score']:.2f}")
         print(f"🚀 Maximum savings achieved: {overall['max_cost_savings']:.1f}%")
         
-        print(f"\n📈 STRATEGY LEADERBOARD:")
-        # Sort strategies by performance
+        # Show total cost impact
+        if total_original_cost > 0:
+            total_savings_percent = ((total_original_cost - total_optimized_cost) / total_original_cost) * 100
+            print(f"💡 Total cost reduction across all tests: {total_savings_percent:.1f}%")
+        
+        # Cache performance
+        print(f"\n⚡ Cache Performance:")
+        print(f"   Hit rate: {cache_stats['hit_rate']:.1%}")
+        print(f"   Cache size: {cache_stats['cache_size']} entries")
+        
+        print(f"\n📈 ENHANCED STRATEGY LEADERBOARD:")
         strategies = list(summary["strategy_breakdown"].items())
         strategies.sort(key=lambda x: x[1]['avg_cost_savings'], reverse=True)
         
@@ -567,10 +1038,10 @@ def main():
             print(f"     🎯 Avg quality: {perf['avg_quality_score']:.2f}")
             print(f"     📊 Runs: {perf['runs']}")
     
-    # Export results
+    # Export enhanced results
     token_gains.export_results()
     
-    print(f"\n✅ TokenGains analysis complete!")
+  
 
 if __name__ == "__main__":
     main()

@@ -867,8 +867,11 @@ class TokenGains:
 
                 self.results.append(result)
 
-                print(f"    ✅ Tokens: {original_tokens} → {reduced_tokens} ({token_reduction:+.1f}%)")
-                print(f"    💰 Cost units: {original_cost:.1f} → {reduced_cost:.1f} ({cost_savings:+.1f}%)")
+                token_trend = "↓" if reduced_tokens < original_tokens else ("↑" if reduced_tokens > original_tokens else "→")
+                print(f"    ✅ Tokens: {original_tokens} → {reduced_tokens} ({token_trend} {abs(token_reduction):.1f}%)")
+
+                cost_trend = "↓" if reduced_cost < original_cost else ("↑" if reduced_cost > original_cost else "→")
+                print(f"    💰 Cost units: {original_cost:.1f} → {reduced_cost:.1f} ({cost_trend} {abs(cost_savings):.1f}%)")
                 print(f"    🎯 Quality: {quality_score:.2f}")
 
             except Exception as e:

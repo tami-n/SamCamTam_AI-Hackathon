@@ -1,6 +1,6 @@
 {
   "model": "llama3.2:3b",
-  "timestamp": "2025-08-23 09:48:52",
+  "timestamp": "2025-08-23 10:12:03",
   "summary": {
     "total_runs": 6,
     "model_used": "llama3.2:3b",
@@ -77,7 +77,7 @@
       "latency_ms": 8488.33155632019
     },
     {
-      "strategy": "domain_aware",
+      "strategy": "improved_aggressive",
       "original_tokens": 141,
       "reduced_tokens": 122,
       "token_reduction_percent": 13.47517730496454,
@@ -86,7 +86,7 @@
       "latency_ms": 8511.714220046997
     },
     {
-      "strategy": "improved_aggressive",
+      "strategy": "domain_aware",
       "original_tokens": 141,
       "reduced_tokens": 122,
       "token_reduction_percent": 13.47517730496454,

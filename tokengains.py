@@ -1098,6 +1098,12 @@ def main():
         
         print("✅ Connected to Ollama server")
         print(f"🎯 Loaded {len(token_gains.strategies)} enhanced strategies")
+
+        # Output preview controls for original vs optimized model outputs (disabled in favor of file export)
+        SHOW_OUTPUT_PREVIEWS = False
+        OUTPUT_PREVIEW_CHARS = 400
+        # File to store full best-strategy pairs per test (JSONL)
+        BEST_PAIR_FILE = "best_strategy_pairs.jsonl"
         
     except Exception as e:
         print(f"❌ Initialization error: {e}")
@@ -1191,8 +1197,33 @@ def main():
             print(f"      📉 Token reduction: {metrics.token_reduction_percent:.1f}%")
             print(f"      🎯 Quality: {metrics.response_quality_score:.2f}")
             
-            if j == 1:  # Show the reduced prompt for the best strategy
+            if j == 1:  # Persist the best strategy pair for offline inspection
                 print(f"      📝 Optimized prompt: {strategy['reduced_prompt'][:100]}...")
+                try:
+                    record = {
+                        "test_index": i,
+                        "model": token_gains.model_name,
+                        "strategy": strategy['strategy'],
+                        "original_prompt": prompt,
+                        "optimized_prompt": strategy['reduced_prompt'],
+                        "original_response": strategy.get('original_response') or "",
+                        "optimized_response": strategy.get('reduced_response') or "",
+                        "metrics": {
+                            "token_reduction_percent": metrics.token_reduction_percent,
+                            "cost_savings_percent": metrics.cost_savings_percent,
+                            "quality_score": metrics.response_quality_score,
+                            "original_tokens": metrics.original_tokens,
+                            "reduced_tokens": metrics.reduced_tokens,
+                            "original_cost_units": metrics.original_cost_units,
+                            "reduced_cost_units": metrics.reduced_cost_units,
+                            "latency_ms": metrics.latency_ms,
+                        },
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    with open(BEST_PAIR_FILE, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                except Exception as _e:
+                    print(f"      ⚠️  Could not write best pair file: {_e}")
     
     # Enhanced final summary
     print(f"\n📊 ENHANCED PERFORMANCE SUMMARY")

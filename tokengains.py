@@ -751,8 +751,8 @@ class TokenGains:
                 
                 self.results.append(result)
                 
-                print(f"    ✅ Tokens: {original_tokens} → {reduced_tokens} (-{token_reduction:.1f}%)")
-                print(f"    💰 Cost units: {original_cost:.1f} → {reduced_cost:.1f} (-{cost_savings:.1f}%)")
+                print(f"    ✅ Tokens: {original_tokens} → {reduced_tokens} ({token_reduction:+.1f}%)")
+                print(f"    💰 Cost units: {original_cost:.1f} → {reduced_cost:.1f} ({cost_savings:+.1f}%)")
                 print(f"    🎯 Quality: {quality_score:.2f}")
                 
             except Exception as e:
@@ -991,7 +991,9 @@ def main():
         print(f"\n🏆 TOP STRATEGIES:")
         for j, strategy in enumerate(sorted_strategies[:3], 1):
             metrics = strategy['metrics']
-            total_optimized_cost += metrics.reduced_cost_units
+            # Only count the best (top-1) strategy toward total optimized cost per test
+            if j == 1:
+                total_optimized_cost += metrics.reduced_cost_units
             
             print(f"   {j}. {strategy['strategy']}")
             print(f"      💰 Cost savings: {metrics.cost_savings_percent:.1f}%")

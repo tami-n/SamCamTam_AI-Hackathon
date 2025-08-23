@@ -2,13 +2,28 @@ import requests
 import time
 import json
 import re
+import os
 import hashlib
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+# Optional: sentence embeddings & HF tokenizer
+try:
+    from sentence_transformers import SentenceTransformer
+    _HAS_ST = True
+except Exception:
+    _HAS_ST = False
+
+try:
+    from transformers import AutoTokenizer  # type: ignore
+    _HAS_HF = True
+except Exception:
+    _HAS_HF = False
 
 
 @dataclass
@@ -454,10 +469,12 @@ class BulletPointStrategy(TokenReductionStrategy):
 class EnhancedTokenCounter:
     """More accurate token counting with caching"""
     
-    def __init__(self):
+    def __init__(self, hf_tokenizer=None, calibration_factor: float = 1.0):
         self.cache = {}
         self.cache_hits = 0
         self.cache_misses = 0
+        self.hf_tokenizer = hf_tokenizer
+        self.calibration_factor = calibration_factor
     
     def count_tokens(self, text: str) -> int:
         # Use text hash for caching
@@ -469,22 +486,28 @@ class EnhancedTokenCounter:
         
         self.cache_misses += 1
         
-        # Improved token counting using multiple methods
-        words = len(text.split())
-        chars = len(text)
-        
-        # Method 1: Word-based (1 token ≈ 0.75 words)
-        word_estimate = int(words * 1.33)
-        
-        # Method 2: Character-based (~3.5-4 chars per token)
-        char_estimate = chars // 4
-        
-        # Method 3: Consider punctuation and special characters
-        special_chars = len(re.findall(r'[^\w\s]', text))
-        punctuation_tokens = special_chars // 2
-        
-        # Weighted average of estimates
-        token_count = int((word_estimate * 0.5 + char_estimate * 0.4 + punctuation_tokens * 0.1))
+        # Prefer HF tokenizer if provided
+        if self.hf_tokenizer is not None:
+            try:
+                token_ids = self.hf_tokenizer(text, add_special_tokens=False).input_ids
+                token_count = len(token_ids)
+            except Exception:
+                token_count = None
+        else:
+            token_count = None
+
+        if token_count is None:
+            # Heuristic token counting using multiple methods
+            words = len(text.split())
+            chars = len(text)
+            word_estimate = int(words * 1.33)  # 1 token ≈ 0.75 words
+            char_estimate = chars // 4         # ~3.5-4 chars per token
+            special_chars = len(re.findall(r'[^\w\s]', text))
+            punctuation_tokens = special_chars // 2
+            token_count = int((word_estimate * 0.5 + char_estimate * 0.4 + punctuation_tokens * 0.1))
+
+        # Apply calibration factor
+        token_count = max(0, int(round(token_count * self.calibration_factor)))
         
         # Cache the result
         self.cache[text_hash] = token_count
@@ -511,10 +534,25 @@ class TokenGains:
     
     def __init__(self, 
                  model_name: str = "llama3.2:3b", 
-                 ollama_url: str = "http://localhost:11434"):
+                 ollama_url: str = "http://localhost:11434",
+                 hf_tokenizer_name: Optional[str] = None,
+                 calibration_factor: float = 1.0,
+                 min_quality_threshold: float = 0.60,
+                 cache_file: str = "response_cache.jsonl"):
         self.model_name = model_name
         self.ollama_url = ollama_url
-        self.token_counter = EnhancedTokenCounter()
+        self.min_quality_threshold = min_quality_threshold
+        self.cache_file = cache_file
+
+        # Optional HF tokenizer for more accurate token counts
+        hf_tok = None
+        if hf_tokenizer_name and _HAS_HF:
+            try:
+                hf_tok = AutoTokenizer.from_pretrained(hf_tokenizer_name, use_fast=True)
+            except Exception:
+                hf_tok = None
+
+        self.token_counter = EnhancedTokenCounter(hf_tokenizer=hf_tok, calibration_factor=calibration_factor)
         self.cost_per_token = 1.0
         
         # Enhanced strategies with quick wins
@@ -524,11 +562,43 @@ class TokenGains:
             LengthAwareStrategy(),
             KeywordExtractionStrategy(),
             StructuralCompressionStrategy(),
-            BulletPointStrategy()
+            BulletPointStrategy(),
+            # New constraint-preserving strategy
+            ConstraintPreservingStrategy()
         ]
         
         self.results: List[QueryResult] = []
-        self.response_cache = {}  # Cache for model responses
+        self.response_cache = {}  # Cache for model responses (in-memory)
+        self._load_response_cache()  # Populate from disk if available
+
+        # Lazy sentence-embedding model
+        self._st_model = None
+
+    def _load_response_cache(self):
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        try:
+                            rec = json.loads(line)
+                            if rec.get("model") == self.model_name and "key" in rec and "response" in rec:
+                                self.response_cache[rec["key"]] = (rec["response"], rec.get("latency_ms", 0.0))
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+    def _append_response_cache(self, key: str, response: str, latency_ms: float):
+        try:
+            with open(self.cache_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "model": self.model_name,
+                    "key": key,
+                    "response": response,
+                    "latency_ms": latency_ms,
+                }) + "\n")
+        except Exception:
+            pass
     
     def check_ollama_connection(self) -> bool:
         """Check if Ollama server is running"""
@@ -539,7 +609,7 @@ class TokenGains:
             return False
     
     def query_local_model(self, prompt: str) -> Tuple[str, float]:
-        """Query with caching to avoid redundant calls"""
+        """Query with caching, retries, and backoff"""
         # Create cache key
         cache_key = hashlib.md5(f"{self.model_name}:{prompt}".encode()).hexdigest()
         
@@ -553,9 +623,7 @@ class TokenGains:
                 "2. Run: ollama serve\n"
                 "3. Pull a model: ollama pull llama3.2:3b"
             )
-        
-        start_time = time.time()
-        
+
         payload = {
             "model": self.model_name,
             "prompt": prompt,
@@ -565,51 +633,74 @@ class TokenGains:
                 "num_predict": 200
             }
         }
-        
-        try:
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=payload,
-                timeout=30
-            )
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            latency = (time.time() - start_time) * 1000
-            response_data = (result.get("response", ""), latency)
-            
-            # Cache the response
-            self.response_cache[cache_key] = response_data
-            
-            # Limit cache size
-            if len(self.response_cache) > 50:
-                # Remove oldest entries
-                oldest_keys = list(self.response_cache.keys())[:10]
-                for key in oldest_keys:
-                    del self.response_cache[key]
-            
-            return response_data
-            
-        except requests.RequestException as e:
-            raise Exception(f"Error querying model: {e}")
+
+        attempts = 0
+        last_err: Optional[Exception] = None
+        while attempts < 3:
+            attempts += 1
+            start_time = time.time()
+            try:
+                response = requests.post(
+                    f"{self.ollama_url}/api/generate",
+                    json=payload,
+                    timeout=30
+                )
+                response.raise_for_status()
+                result = response.json()
+                latency = (time.time() - start_time) * 1000
+                response_data = (result.get("response", ""), latency)
+
+                # Cache in memory and persist to disk
+                self.response_cache[cache_key] = response_data
+                self._append_response_cache(cache_key, response_data[0], response_data[1])
+
+                # Limit cache size
+                if len(self.response_cache) > 200:
+                    oldest_keys = list(self.response_cache.keys())[:40]
+                    for key in oldest_keys:
+                        try:
+                            del self.response_cache[key]
+                        except KeyError:
+                            pass
+                return response_data
+            except requests.RequestException as e:
+                last_err = e
+                # Exponential backoff
+                time.sleep(min(2 ** attempts, 8))
+            except Exception as e:
+                last_err = e
+                time.sleep(min(2 ** attempts, 8))
+        raise Exception(f"Error querying model after {attempts} attempts: {last_err}")
     
     def calculate_cost_units(self, tokens: int) -> float:
         """Calculate cost units based on token count"""
         return tokens * self.cost_per_token
     
     def evaluate_response_quality(self, original_response: str, reduced_response: str) -> float:
-        """Enhanced quality evaluation with length-aware scoring"""
+        """Enhanced quality evaluation with sentence embeddings + TF-IDF fallback and length-aware scoring"""
         if not original_response or not reduced_response:
             return 0.0
 
         # Semantic similarity (primary metric)
-        try:
-            vectorizer = TfidfVectorizer().fit([original_response, reduced_response])
-            tfidf = vectorizer.transform([original_response, reduced_response])
-            semantic_score = cosine_similarity(tfidf[0], tfidf[1])[0][0]
-        except Exception:
-            semantic_score = 0.0
+        semantic_score = 0.0
+        # Try sentence embeddings
+        if _HAS_ST:
+            try:
+                if self._st_model is None:
+                    self._st_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+                emb = self._st_model.encode([original_response, reduced_response], normalize_embeddings=True)
+                # Cosine since normalized
+                semantic_score = float((emb[0] @ emb[1]).item() if hasattr(emb[0], 'item') else emb[0].dot(emb[1]))
+            except Exception:
+                semantic_score = 0.0
+        if semantic_score == 0.0:
+            # Fallback to TF-IDF
+            try:
+                vectorizer = TfidfVectorizer().fit([original_response, reduced_response])
+                tfidf = vectorizer.transform([original_response, reduced_response])
+                semantic_score = float(cosine_similarity(tfidf[0], tfidf[1])[0][0])
+            except Exception:
+                semantic_score = 0.0
 
         # Structure preservation
         original_sentences = len(re.findall(r'[.!?]+', original_response))
@@ -679,12 +770,16 @@ class TokenGains:
         # Add structural for very long texts
         if word_count > 100:
             selected_strategies.append(StructuralCompressionStrategy())
+
+        # Add constraint-preserving when constraints or code clues exist
+        if any(tok in text_lower for tok in ["```", "traceback", "error", "exception", "must", "should", "shall"]):
+            selected_strategies.append(ConstraintPreservingStrategy())
         
         # Limit to top 4 strategies to avoid over-testing
         return selected_strategies[:4]
     
     def run_comparison(self, prompt: str) -> Dict:
-        """Enhanced comparison with smart strategy selection"""
+        """Enhanced comparison with smart strategy selection and early-exit evaluation"""
         print(f"🔍 Analyzing prompt: {prompt[:100]}...")
         
         original_tokens = self.token_counter.count_tokens(prompt)
@@ -703,32 +798,53 @@ class TokenGains:
             print(f"❌ Error with original query: {e}")
             return {"error": str(e)}
         
-        # Test selected strategies
-        strategy_results = []
-        
-        for strategy in selected_strategies:
+        # Phase 1: fast reductions in parallel to choose top candidates (by token cut)
+        preliminary: List[Tuple[TokenReductionStrategy, str, int]] = []
+        with ThreadPoolExecutor(max_workers=min(4, len(selected_strategies))) as ex:
+            futures = {ex.submit(self.optimize_query, prompt, s): s for s in selected_strategies}
+            for fut in as_completed(futures):
+                s = futures[fut]
+                try:
+                    reduced_prompt, reduced_tokens = fut.result()
+                    preliminary.append((s, reduced_prompt, reduced_tokens))
+                except Exception as e:
+                    print(f"    ❌ Reduction failed for {s.get_name()}: {e}")
+                    continue
+
+        # Filter by minimum 5% input token reduction
+        prelim_filtered = [p for p in preliminary if p[2] < original_tokens * 0.95]
+        if not prelim_filtered:
+            return {
+                "original_prompt": prompt,
+                "original_tokens": original_tokens,
+                "original_cost": original_cost,
+                "strategies": []
+            }
+
+        # Rank by estimated savings (input token cut) and take top 2
+        prelim_filtered.sort(key=lambda t: (original_tokens - t[2]) / max(1, original_tokens), reverse=True)
+        top_candidates = prelim_filtered[:2]
+
+        # Phase 2: query model for the top candidates
+        strategy_results: List[Dict] = []
+        for strategy, reduced_prompt, reduced_tokens in top_candidates:
             try:
                 print(f"  🔧 Testing {strategy.get_name()}...")
-                
-                # Optimize prompt
-                reduced_prompt, reduced_tokens = self.optimize_query(prompt, strategy)
-                
-                # Skip if no meaningful reduction achieved
-                if reduced_tokens >= original_tokens * 0.95:  # Less than 5% reduction
-                    print(f"    ⚠️  Insufficient token reduction achieved")
-                    continue
-                
-                # Run optimized query
+
                 reduced_response, reduced_latency = self.query_local_model(reduced_prompt)
                 reduced_output_tokens = self.token_counter.count_tokens(reduced_response)
                 reduced_cost = self.calculate_cost_units(reduced_tokens + reduced_output_tokens)
-                
-                # Calculate metrics
+
                 token_reduction = ((original_tokens - reduced_tokens) / original_tokens) * 100
                 cost_savings = ((original_cost - reduced_cost) / original_cost) * 100
-                
+
                 quality_score = self.evaluate_response_quality(original_response, reduced_response)
-                
+
+                # Enforce minimum quality threshold
+                if quality_score < self.min_quality_threshold:
+                    print(f"    ⚠️  Discarded due to low quality ({quality_score:.2f} < {self.min_quality_threshold:.2f})")
+                    continue
+
                 result = QueryResult(
                     original_tokens=original_tokens,
                     reduced_tokens=reduced_tokens,
@@ -740,7 +856,7 @@ class TokenGains:
                     latency_ms=reduced_latency,
                     strategy_used=strategy.get_name()
                 )
-                
+
                 strategy_results.append({
                     "strategy": strategy.get_name(),
                     "reduced_prompt": reduced_prompt,
@@ -748,13 +864,13 @@ class TokenGains:
                     "reduced_response": reduced_response,
                     "metrics": result
                 })
-                
+
                 self.results.append(result)
-                
+
                 print(f"    ✅ Tokens: {original_tokens} → {reduced_tokens} ({token_reduction:+.1f}%)")
                 print(f"    💰 Cost units: {original_cost:.1f} → {reduced_cost:.1f} ({cost_savings:+.1f}%)")
                 print(f"    🎯 Quality: {quality_score:.2f}")
-                
+
             except Exception as e:
                 print(f"    ❌ Error with strategy {strategy.get_name()}: {e}")
                 continue
@@ -879,6 +995,78 @@ class TokenGains:
             analysis["recommended_strategies"] = ["domain_aware", "enhanced_keyword_extraction"]
         
         return analysis
+
+
+class ConstraintPreservingStrategy(TokenReductionStrategy):
+    """Preserve constraints, code fences, stack traces, steps, and critical requirements while trimming fluff."""
+
+    def reduce_tokens(self, text: str) -> str:
+        # Capture preserved blocks
+        preserved_blocks = []
+
+        # Code fences ``` ... ```
+        code_fence_pattern = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+        def _store(match):
+            block = match.group(0).strip()
+            preserved_blocks.append(block)
+            return ""
+        text_wo_code = code_fence_pattern.sub(_store, text)
+
+        # Inline code `...`
+        inline_code_pattern = re.compile(r"`[^`\n]+`")
+        def _store_inline(m):
+            preserved_blocks.append(m.group(0))
+            return ""
+        text_wo_code = inline_code_pattern.sub(_store_inline, text_wo_code)
+
+        # Stack traces / errors
+        lines = text_wo_code.splitlines()
+        kept_lines = []
+        for ln in lines:
+            l = ln.strip()
+            if not l:
+                continue
+            if (
+                l.startswith("Traceback") or
+                re.search(r"\b(File \".*?\", line \d+)\b", l) or
+                re.search(r"\bError|Exception|at\b", l, re.IGNORECASE)
+            ):
+                preserved_blocks.append(ln)
+                continue
+            # Numbered or bulleted steps
+            if re.match(r"^\s*(\d+\.|-\s+|\*)\s+", ln):
+                kept_lines.append(ln)
+                continue
+            # Quoted text
+            if re.search(r'"[^"]+"|\'[^\']+\'', ln):
+                kept_lines.append(ln)
+                continue
+            # Requirements: must/should/shall, constraints with numbers+units
+            if re.search(r"\b(must|should|shall|required)\b", l, re.IGNORECASE) or re.search(r"\b\d+(?:\.\d+)?\s?(ms|s|sec|msec|kb|mb|gb|tb|%|px)\b", l, re.IGNORECASE):
+                kept_lines.append(ln)
+                continue
+            # For code-domain clues keep function signatures or snippets-like lines
+            if re.search(r"\bdef\s+\w+\(|\bclass\s+\w+\(|\w+\s*=\s*lambda|;|\{\}|=>", l):
+                kept_lines.append(ln)
+                continue
+
+        # Clean remaining text aggressively for pleasantries
+        remaining_text = " ".join([ln for ln in lines if ln not in preserved_blocks])
+        remaining_text = re.sub(r"\b(please|kindly|would you|could you|i would like|i think|i believe|thanks|thank you)\b", "", remaining_text, flags=re.IGNORECASE)
+        remaining_text = re.sub(r"\s+", " ", remaining_text).strip()
+
+        # Build concise output
+        parts = []
+        if kept_lines:
+            parts.append(" | ".join([re.sub(r"\s+", " ", k.strip()) for k in kept_lines]))
+        if remaining_text:
+            parts.append(remaining_text)
+        # Append code/inline code blocks at the end to preserve fidelity
+        parts.extend(preserved_blocks)
+        return "\n".join([p for p in parts if p])
+
+    def get_name(self) -> str:
+        return "constraint_preserving"
 
 def main():
     """Enhanced main function with better testing and analysis"""

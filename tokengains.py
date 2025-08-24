@@ -11,6 +11,7 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import argparse
 
 # Optional: sentence embeddings & HF tokenizer
 try:
@@ -1074,16 +1075,27 @@ class ConstraintPreservingStrategy(TokenReductionStrategy):
 def main():
     """Enhanced main function with better testing and analysis"""
     
+    # Add argument parser
+    parser = argparse.ArgumentParser(description='Enhanced TokenGains - Local LLM Cost Optimization')
+    parser.add_argument('--model', '-m', 
+                       default='llama3.2:3b',
+                       help='Model name to use (default: llama3.2:3b)')
+    parser.add_argument('--url', '-u',
+                       default='http://localhost:11434',
+                       help='Ollama server URL (default: http://localhost:11434)')
+    
+    args = parser.parse_args()
+    
     print("🚀 Enhanced TokenGains - Local LLM Cost Optimization")
     print("=" * 60)
     
-    # Initialize enhanced TokenGains
-    print("🔧 Initializing Enhanced TokenGains...")
+    # Initialize enhanced TokenGains with CLI arguments
+    print(f"🔧 Initializing Enhanced TokenGains with model: {args.model}")
     
     try:
         token_gains = TokenGains(
-            model_name="llama3.2:3b",
-            ollama_url="http://localhost:11434"
+            model_name=args.model,
+            ollama_url=args.url
         )
         
         # Check connection
@@ -1092,11 +1104,12 @@ def main():
             print("\n📋 Setup Instructions:")
             print("1. Install Ollama: https://ollama.ai")
             print("2. Start Ollama: ollama serve")
-            print("3. Pull a model: ollama pull llama3.2:3b")
+            print(f"3. Pull the model: ollama pull {args.model}")
             print("4. Run this script again")
             return
         
         print("✅ Connected to Ollama server")
+        print(f"🎯 Using model: {args.model}")
         print(f"🎯 Loaded {len(token_gains.strategies)} enhanced strategies")
 
         # Output preview controls for original vs optimized model outputs (disabled in favor of file export)

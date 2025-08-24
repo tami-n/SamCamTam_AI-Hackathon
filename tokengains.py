@@ -11,6 +11,7 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import argparse
 
 # Optional: sentence embeddings & HF tokenizer
 try:
@@ -538,11 +539,15 @@ class TokenGains:
                  hf_tokenizer_name: Optional[str] = None,
                  calibration_factor: float = 1.0,
                  min_quality_threshold: float = 0.60,
-                 cache_file: str = "response_cache.jsonl"):
+                 cache_file: str = "response_cache.jsonl",
+                 provider: str = "local",
+                 openai_api_key: Optional[str] = None):
         self.model_name = model_name
         self.ollama_url = ollama_url
         self.min_quality_threshold = min_quality_threshold
         self.cache_file = cache_file
+        self.provider = provider
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
 
         # Optional HF tokenizer for more accurate token counts
         hf_tok = None
@@ -600,6 +605,14 @@ class TokenGains:
         except Exception:
             pass
     
+    def check_connection(self) -> bool:
+        """Check if the selected provider is available"""
+        if self.provider == "local":
+            return self.check_ollama_connection()
+        elif self.provider == "hosted":
+            return self.check_openai_connection()
+        return False
+    
     def check_ollama_connection(self) -> bool:
         """Check if Ollama server is running"""
         try:
@@ -608,20 +621,43 @@ class TokenGains:
         except requests.RequestException:
             return False
     
+    def check_openai_connection(self) -> bool:
+        """Check if OpenAI API key is valid"""
+        if not self.openai_api_key:
+            return False
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.openai_api_key}",
+                "Content-Type": "application/json"
+            }
+            response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+    
     def query_local_model(self, prompt: str) -> Tuple[str, float]:
         """Query with caching, retries, and backoff"""
         # Create cache key
-        cache_key = hashlib.md5(f"{self.model_name}:{prompt}".encode()).hexdigest()
+        cache_key = hashlib.md5(f"{self.provider}:{self.model_name}:{prompt}".encode()).hexdigest()
         
         if cache_key in self.response_cache:
             return self.response_cache[cache_key]
         
+        if self.provider == "local":
+            return self._query_ollama(prompt, cache_key)
+        elif self.provider == "hosted":
+            return self._query_openai(prompt, cache_key)
+        else:
+            raise ValueError(f"Unknown provider: {self.provider}")
+    
+    def _query_ollama(self, prompt: str, cache_key: str) -> Tuple[str, float]:
+        """Query Ollama local model"""
         if not self.check_ollama_connection():
             raise ConnectionError(
                 "Cannot connect to Ollama server. Make sure Ollama is running:\n"
                 "1. Install Ollama from https://ollama.ai\n"
                 "2. Run: ollama serve\n"
-                "3. Pull a model: ollama pull llama3.2:3b"
+                f"3. Pull the model: ollama pull {self.model_name}"
             )
 
         payload = {
@@ -671,6 +707,70 @@ class TokenGains:
                 last_err = e
                 time.sleep(min(2 ** attempts, 8))
         raise Exception(f"Error querying model after {attempts} attempts: {last_err}")
+    
+    def _query_openai(self, prompt: str, cache_key: str) -> Tuple[str, float]:
+        """Query OpenAI API"""
+        if not self.openai_api_key:
+            raise ValueError(
+                "OpenAI API key required for hosted mode. Set OPENAI_API_KEY environment variable or pass --api-key"
+            )
+
+        # Map common model names to OpenAI equivalents
+        openai_model = self.model_name
+        if self.model_name.startswith("llama") or self.model_name.startswith("deepseek"):
+            openai_model = "gpt-4o-mini"  # Default fallback
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.openai_api_key}"
+        }
+
+        payload = {
+            "model": openai_model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 200,
+            "temperature": 0.7
+        }
+
+        attempts = 0
+
+
+        last_err: Optional[Exception] = None
+        while attempts < 3:
+            attempts += 1
+            start_time = time.time()
+            # Add delay for hosted provider
+            time.sleep(10)  # 10 second delay between requests
+
+            try:
+                response = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+                response.raise_for_status()
+                result = response.json()
+                latency = (time.time() - start_time) * 1000
+                
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                response_data = (content, latency)
+
+                # Cache the response
+                self.response_cache[cache_key] = response_data
+                self._append_response_cache(cache_key, response_data[0], response_data[1])
+
+                return response_data
+            except requests.RequestException as e:
+                last_err = e
+                time.sleep(min(2 ** attempts, 8))
+            except Exception as e:
+                last_err = e
+                time.sleep(min(2 ** attempts, 8))
+        
+        raise Exception(f"Error querying OpenAI after {attempts} attempts: {last_err}")
     
     def calculate_cost_units(self, tokens: int) -> float:
         """Calculate cost units based on token count"""
@@ -794,6 +894,7 @@ class TokenGains:
             original_response, original_latency = self.query_local_model(prompt)
             original_output_tokens = self.token_counter.count_tokens(original_response)
             original_cost = self.calculate_cost_units(original_tokens + original_output_tokens)
+                
         except Exception as e:
             print(f"❌ Error with original query: {e}")
             return {"error": str(e)}
@@ -1074,29 +1175,65 @@ class ConstraintPreservingStrategy(TokenReductionStrategy):
 def main():
     """Enhanced main function with better testing and analysis"""
     
+    # Add argument parser
+    parser = argparse.ArgumentParser(description='Enhanced TokenGains - Local LLM Cost Optimization')
+    parser.add_argument('--model', '-m', 
+                       default='llama3.2:3b',
+                       help='Model name to use (default: llama3.2:3b for local, gpt-4o-mini for hosted)')
+    parser.add_argument('--url', '-u',
+                       default='http://localhost:11434',
+                       help='Ollama server URL (default: http://localhost:11434)')
+    parser.add_argument('--provider', '-p',
+                       choices=['local', 'hosted'],
+                       default='local',
+                       help='Provider to use: local (Ollama) or hosted (OpenAI)')
+    parser.add_argument('--api-key',
+                       help='OpenAI API key (can also use OPENAI_API_KEY env var)')
+    
+    args = parser.parse_args()
+    
+    # Adjust default model based on provider
+    if args.provider == 'hosted' and args.model == 'llama3.2:3b':
+        args.model = 'gpt-4o-mini'
+    
     print("🚀 Enhanced TokenGains - Local LLM Cost Optimization")
     print("=" * 60)
     
-    # Initialize enhanced TokenGains
-    print("🔧 Initializing Enhanced TokenGains...")
+    # Initialize enhanced TokenGains with CLI arguments
+    print(f"🔧 Initializing Enhanced TokenGains")
+    print(f"   Provider: {args.provider}")
+    print(f"   Model: {args.model}")
+    if args.provider == 'local':
+        print(f"   Ollama URL: {args.url}")
     
     try:
         token_gains = TokenGains(
-            model_name="llama3.2:3b",
-            ollama_url="http://localhost:11434"
+            model_name=args.model,
+            ollama_url=args.url,
+            provider=args.provider,
+            openai_api_key=args.api_key
         )
         
         # Check connection
-        if not token_gains.check_ollama_connection():
-            print("❌ Cannot connect to Ollama server!")
-            print("\n📋 Setup Instructions:")
-            print("1. Install Ollama: https://ollama.ai")
-            print("2. Start Ollama: ollama serve")
-            print("3. Pull a model: ollama pull llama3.2:3b")
-            print("4. Run this script again")
+        if not token_gains.check_connection():
+            if args.provider == 'local':
+                print("❌ Cannot connect to Ollama server!")
+                print("\n📋 Setup Instructions:")
+                print("1. Install Ollama: https://ollama.ai")
+                print("2. Start Ollama: ollama serve")
+                print(f"3. Pull the model: ollama pull {args.model}")
+                print("4. Run this script again")
+            else:
+                print("❌ Cannot connect to OpenAI API!")
+                print("\n📋 Setup Instructions:")
+                print("1. Get an API key from https://platform.openai.com/api-keys")
+                print("2. Set environment variable: set OPENAI_API_KEY=your-key-here")
+                print("3. Or use --api-key parameter")
+                print("4. Run this script again")
             return
         
-        print("✅ Connected to Ollama server")
+        print("✅ Connected successfully")
+        print(f"🎯 Using model: {args.model}")
         print(f"🎯 Loaded {len(token_gains.strategies)} enhanced strategies")
 
         # Output preview controls for original vs optimized model outputs (disabled in favor of file export)

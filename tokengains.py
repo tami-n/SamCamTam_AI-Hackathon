@@ -539,7 +539,7 @@ class TokenGains:
                  hf_tokenizer_name: Optional[str] = None,
                  calibration_factor: float = 1.0,
                  min_quality_threshold: float = 0.60,
-                 cache_file: str = "response_cache.jsonl",
+                 cache_file: str = "data/response_cache.jsonl",  # Updated path
                  provider: str = "local",
                  openai_api_key: Optional[str] = None):
         self.model_name = model_name
@@ -581,6 +581,8 @@ class TokenGains:
 
     def _load_response_cache(self):
         try:
+            # Create data directory if it doesn't exist
+            os.makedirs("data", exist_ok=True)
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     for line in f:
@@ -1045,8 +1047,15 @@ class TokenGains:
             "cache_performance": cache_stats
         }
 
-    def export_results(self, filename: str = "enhanced_tokengains_results.json"):
-        """Export enhanced results to JSON file"""
+    def export_results(self, filename: Optional[str] = None):
+        """Export enhanced results to JSON file with model name appended"""
+        if filename is None:
+            # Create data directory if it doesn't exist
+            os.makedirs("data", exist_ok=True)
+            # Sanitize model name for filename (replace special characters)
+            safe_model_name = re.sub(r'[^\w\-_.]', '_', self.model_name)
+            filename = f"data/enhanced_tokengains_results_{safe_model_name}.json"
+        
         results_data = {
             "model": self.model_name,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1240,7 +1249,8 @@ def main():
         SHOW_OUTPUT_PREVIEWS = False
         OUTPUT_PREVIEW_CHARS = 400
         # File to store full best-strategy pairs per test (JSONL)
-        BEST_PAIR_FILE = "best_strategy_pairs.jsonl"
+        safe_model_name = re.sub(r'[^\w\-_.]', '_', args.model)
+        BEST_PAIR_FILE = f"data/best_strategy_pairs_{safe_model_name}.jsonl"
         
     except Exception as e:
         print(f"❌ Initialization error: {e}")

@@ -1,0 +1,98 @@
+{
+  "model": "llama3.2:3b",
+  "timestamp": "2025-08-24 17:33:20",
+  "summary": {
+    "total_runs": 6,
+    "model_used": "llama3.2:3b",
+    "overall_metrics": {
+      "avg_token_reduction": 12.920160079108765,
+      "avg_cost_savings": 3.7564442261435227,
+      "avg_quality_score": 0.7056666666666667,
+      "max_token_reduction": 21.978021978021978,
+      "max_cost_savings": 6.578947368421052,
+      "best_quality": 0.768
+    },
+    "strategy_breakdown": {
+      "improved_aggressive": {
+        "avg_token_reduction": 13.813643594619816,
+        "avg_cost_savings": 2.7791032862838105,
+        "avg_quality_score": 0.68075,
+        "runs": 4
+      },
+      "length_aware": {
+        "avg_token_reduction": 8.791208791208792,
+        "avg_cost_savings": 6.578947368421052,
+        "avg_quality_score": 0.743,
+        "runs": 1
+      },
+      "domain_aware": {
+        "avg_token_reduction": 13.47517730496454,
+        "avg_cost_savings": 4.843304843304843,
+        "avg_quality_score": 0.768,
+        "runs": 1
+      }
+    },
+    "cache_performance": {
+      "cache_hits": 2,
+      "cache_misses": 33,
+      "cache_size": 33,
+      "hit_rate": 0.05714285714285714
+    }
+  },
+  "detailed_results": [
+    {
+      "strategy": "improved_aggressive",
+      "original_tokens": 91,
+      "reduced_tokens": 71,
+      "token_reduction_percent": 21.978021978021978,
+      "cost_savings_percent": 4.276315789473684,
+      "quality_score": 0.727,
+      "latency_ms": 9883.280992507935
+    },
+    {
+      "strategy": "length_aware",
+      "original_tokens": 91,
+      "reduced_tokens": 83,
+      "token_reduction_percent": 8.791208791208792,
+      "cost_savings_percent": 6.578947368421052,
+      "quality_score": 0.743,
+      "latency_ms": 9576.387405395508
+    },
+    {
+      "strategy": "improved_aggressive",
+      "original_tokens": 77,
+      "reduced_tokens": 69,
+      "token_reduction_percent": 10.38961038961039,
+      "cost_savings_percent": -0.33783783783783783,
+      "quality_score": 0.609,
+      "latency_ms": 9277.532577514648
+    },
+    {
+      "strategy": "improved_aggressive",
+      "original_tokens": 85,
+      "reduced_tokens": 77,
+      "token_reduction_percent": 9.411764705882353,
+      "cost_savings_percent": 2.3346303501945527,
+      "quality_score": 0.619,
+      "latency_ms": 10945.551872253418
+    },
+    {
+      "strategy": "improved_aggressive",
+      "original_tokens": 141,
+      "reduced_tokens": 122,
+      "token_reduction_percent": 13.47517730496454,
+      "cost_savings_percent": 4.843304843304843,
+      "quality_score": 0.768,
+      "latency_ms": 11627.907991409302
+    },
+    {
+      "strategy": "domain_aware",
+      "original_tokens": 141,
+      "reduced_tokens": 122,
+      "token_reduction_percent": 13.47517730496454,
+      "cost_savings_percent": 4.843304843304843,
+      "quality_score": 0.768,
+      "latency_ms": 11627.907991409302
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # TokenGains — Local LLM Cost Optimization
 
-TokenGains helps you reduce prompt tokens and cost when querying a local LLM (via Ollama) while keeping response quality high. It tries multiple token-reduction strategies, runs the original and optimized prompts against your model, scores quality, and exports a summary.
+TokenGains helps you reduce prompt tokens and cost when querying a local LLM (via Ollama) or hosted models (via OpenAI) while keeping response quality high. It tries multiple token-reduction strategies, runs the original and optimized prompts against your model, scores quality, and exports a summary.
 
 ## What it does
 
@@ -11,7 +11,8 @@ TokenGains helps you reduce prompt tokens and cost when querying a local LLM (vi
   - Length-aware compression (adapts to prompt size)
   - Keyword extraction (keeps high-signal sentences)
   - Structural and bullet-point variants
-- Queries your local Ollama model for both original and optimized prompts.
+  - Constraint-preserving strategy (preserves code, requirements, stack traces)
+- Queries your local Ollama model or hosted OpenAI API for both original and optimized prompts.
 - Estimates token counts and cost units, then computes savings.
 - Evaluates quality with TF‑IDF cosine similarity + structure/keyword retention.
 - Prints a leaderboard and exports results to `enhanced_tokengains_results.json`.
@@ -20,10 +21,13 @@ TokenGains helps you reduce prompt tokens and cost when querying a local LLM (vi
 
 - Windows, macOS, or Linux
 - Python 3.9+ (3.11+ recommended)
-- Ollama installed and running
-  - Install: https://ollama.ai
-  - Start server: `ollama serve`
-  - Pull the default model used by this repo: `ollama pull llama3.2:3b`
+- **For local provider (default):**
+  - Ollama installed and running
+    - Install: https://ollama.ai
+    - Start server: `ollama serve`
+    - Pull a model: `ollama pull llama3.2:3b` or `ollama pull deepseek-r1:1.5b`
+- **For hosted provider:**
+  - OpenAI API key from https://platform.openai.com/api-keys
 - Python packages:
   - `requests`
   - `scikit-learn`
@@ -43,83 +47,138 @@ python -m venv .venv
 pip install requests scikit-learn
 ```
 
-3) Start Ollama and ensure the model is available
+3) **For local provider:** Start Ollama and ensure the model is available
 
 ```powershell
 ollama serve
 # In a separate terminal, once the server is running:
 ollama pull llama3.2:3b
+# Or try DeepSeek:
+ollama pull deepseek-r1:1.5b
 ```
 
-4) Run the script
+4) **For hosted provider:** Set up your OpenAI API key
 
 ```powershell
-python .\tokengains.py
+set OPENAI_API_KEY=your-api-key-here
 ```
 
-You should see five test runs, a performance summary, and an exported file `enhanced_tokengains_results.json` with details.
+5) Run the script
+
+```powershell
+# Default: local provider with llama3.2:3b
+python tokengains.py
+
+# Use DeepSeek model locally
+python tokengains.py --model deepseek-r1:1.5b
+
+# Use hosted OpenAI with environment variable
+python tokengains.py --provider hosted
+
+# Use hosted OpenAI with API key parameter
+python tokengains.py --provider hosted --api-key your-api-key-here
+
+# Use different Ollama server
+python tokengains.py --provider local --model llama3.2:3b --url http://192.168.1.100:11434
+```
+
+You should see five test runs, a performance summary, and exported files with detailed results.
+
+## Command Line Options
+
+```
+python tokengains.py [OPTIONS]
+
+Options:
+  -m, --model MODEL        Model name to use
+                          Default: llama3.2:3b (local), gpt-4o-mini (hosted)
+                          Examples: deepseek-r1:1.5b, gpt-4o, gpt-3.5-turbo
+  
+  -p, --provider PROVIDER  Provider to use: local or hosted
+                          Default: local
+                          local = Ollama server
+                          hosted = OpenAI API
+  
+  -u, --url URL           Ollama server URL (local provider only)
+                          Default: http://localhost:11434
+  
+  --api-key KEY           OpenAI API key (hosted provider only)
+                          Can also use OPENAI_API_KEY environment variable
+  
+  -h, --help              Show help message
+```
+
+## Usage Examples
+
+### Local Provider Examples
+
+```powershell
+# Default setup
+python tokengains.py
+
+# Use different model
+python tokengains.py --model deepseek-r1:7b
+
+# Use remote Ollama server
+python tokengains.py --url http://192.168.1.100:11434
+
+# Combine options
+python tokengains.py --model llama3.2:1b --url http://localhost:11434
+```
+
+### Hosted Provider Examples
+
+```powershell
+# Use environment variable for API key
+set OPENAI_API_KEY=sk-proj-your-key-here
+python tokengains.py --provider hosted
+
+# Pass API key directly
+python tokengains.py --provider hosted --api-key sk-proj-your-key-here
+
+# Use specific GPT model
+python tokengains.py --provider hosted --model gpt-4o --api-key your-key-here
+
+# Use cheaper model
+python tokengains.py --provider hosted --model gpt-3.5-turbo
+```
 
 ## Interpreting the output
 
-- For each test prompt, you’ll see:
+- For each test prompt, you'll see:
+  - Prompt analysis (word count, redundancy score, recommended strategies)
   - Tokens and cost units before/after each strategy and the percent change
   - A quality score (0–1) that blends semantic similarity, structure, and concept retention
 - A leaderboard ranks strategies by average cost savings
 - A final summary shows averages across all runs and basic cache stats
-- Results are exported to `enhanced_tokengains_results.json`
+- Results are exported to:
+  - `enhanced_tokengains_results.json` - Complete analysis results
+  - `best_strategy_pairs.jsonl` - Best prompt optimizations for each test
+  - `response_cache.jsonl` - Cached model responses
 
 Notes:
-- “Cost units” are abstract by default (1 unit per token). Adjust `cost_per_token` in `TokenGains.__init__` if you want a different scale.
+- "Cost units" are abstract by default (1 unit per token). Adjust `cost_per_token` in `TokenGains.__init__` if you want a different scale.
 - Token counts are approximate (heuristics), but consistent for comparisons.
+- For hosted provider, requests are automatically rate-limited to avoid API limits.
 
 ## Customizing
 
-- Change the model or server URL:
-  - In `tokengains.py`, update `TokenGains(model_name="llama3.2:3b", ollama_url="http://localhost:11434")`
-- Try your own prompts:
-  - Edit the `test_prompts` list in `main()`
-  - Or use the class programmatically:
+- Change the model or server URL using command line options (see above)
+- Try your own prompts by editing the `test_prompts` list in `main()`
+- Or use the class programmatically:
 
 ```python
 from tokengains import TokenGains
 
-tg = TokenGains(model_name="llama3.2:3b", ollama_url="http://localhost:11434")
+# Local provider
+tg = TokenGains(model_name="deepseek-r1:1.5b", provider="local")
+
+# Hosted provider
+tg = TokenGains(model_name="gpt-4o-mini", provider="hosted", openai_api_key="your-key")
+
 prompt = "Summarize the key trade-offs of vector databases vs. relational databases for analytics."
 result = tg.run_comparison(prompt)
 print(result["strategies"])  # list of strategies with metrics
 
 tg.export_results("my_results.json")
 ```
-
-- Tune aggressiveness/quality:
-  - Edit or add strategies by extending `TokenReductionStrategy`
-  - Adjust `select_best_strategies()` for selection rules
-  - Adjust weightings in `evaluate_response_quality()` to bias toward quality or savings
-
-## Troubleshooting
-
-- Cannot connect to Ollama:
-  - Ensure `ollama serve` is running and `http://localhost:11434` is reachable
-  - Pull the model first: `ollama pull llama3.2:3b`
-  - If you changed the model name in code, make sure it’s pulled and spelled correctly
-- `scikit-learn` install issues:
-  - Upgrade pip: `python -m pip install --upgrade pip`
-  - Try again in a fresh virtual environment
-- Empty or low quality scores:
-  - Quality uses TF‑IDF similarity; very short or highly rephrased responses can score lower
-  - Adjust weights in `evaluate_response_quality()` if needed
-
-## Files
-
-- `tokengains.py` — main script with strategies, scoring, and execution
-- `enhanced_tokengains_results.json` — latest exported results (created on run)
-- `tokengains_results.json` — legacy or alternative results (if present)
-- `input.txt` — optional scratchpad (not used by the script)
-
-## Roadmap ideas
-
-- Add CLI flags to pass a prompt/file and set model/URL without editing code
-- Support multiple models and batch runs via config
-- More robust tokenization (e.g., model-specific tokenizers)
-- Optional OpenAI/compatible API support
-- Persist and visualize runs over time
